@@ -1,0 +1,77 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:          Zeng Xiangfei
+# Required-Start:    $vnstat
+# Required-Stop:     $vnstat $nginx
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: vnstat.json update service
+# Description:       updates vnstat.json when vnStat database updated
+### END INIT INFO
+
+INOTIFYWAIT=/usr/bin/inotifywait
+VNSTAT=/usr/bin/vnstat
+VNSTAT_CONF=/etc/vnstat.conf
+VNSTAT_DATABASE_DIR=/var/lib/vnstat
+VNSTAT_JSON=/var/run/vnstat.json
+AWK=/usr/bin/awk
+NAME=vnstat-json-update
+DESC="vnstat.json update service"
+PIDFILE=/var/run/$NAME.pid
+DAEMON=/etc/init.d/vnstat-json-update
+
+. /lib/lsb/init-functions
+
+get_vnstat_database_dir() {
+    if [ -e $VNSTAT_CONF ]; then
+        awk_result=`$AWK '/DatabaseDir/ { match($2, /^\"(.+)\"$/, groups); print groups[1]; }' $VNSTAT_CONF`
+        if [ "$awk_result" == "" ]; then
+            log_warning_msg "Cannot find variable 'DatabaseDir' in vnStat config file $VNSTAT_CONF. Use default value '$VNSTAT_DATABASE_DIR' instead."
+        fi
+    else
+        log_warning_msg "Cannot find vnStat config file $VNSTAT_CONF. Use DatabaseDir default value '$VNSTAT_DATABASE_DIR' instead."
+    fi
+}
+
+worker_routine() {
+    get_vnstat_database_dir
+    $VNSTAT --json > $VNSTAT_JSON
+    while $INOTIFYWAIT -e modify -r -q $VNSTAT_DATABASE_DIR > /dev/null; do
+        $VNSTAT --json > $VNSTAT_JSON
+    done
+}
+
+case "$1" in
+    start)
+        log_daemon_msg "Starting $DESC" "$NAME"
+        start_daemon -p $PIDFILE $DAEMON daemon
+        log_end_msg $?
+        ;;
+    stop)
+        log_daemon_message "Stopping $DESC" "$NAME"
+        killproc -p $PIDFILE $DAEMON
+        RETVAL=$?
+        [ $RETVAL -eq 0 ] && [ -e "$PIDFILE" ] && rm -f $PIDFILE
+        log_end_msg $RETVAL
+        ;;
+    restart)
+        log_daemon_message "Restarting $DESC" "$NAME"
+        $0 stop
+        $0 start
+        ;;
+    reload|force-reload) log_daemon_msg "Reloading $DESC" "$NAME"
+        $0 restart
+        log_end_msg $?
+        ;;
+    status)
+        status_of_proc -p $PIDFILE "$DAEMON" "$NAME" && exit 0 || exit $?
+        ;;
+    daemon)
+        worker_routine & > /dev/null
+        ;;
+    *)
+        log_action_msg "Usage: $NAME {start|stop|status|restart|reload|force-reload}"
+        exit 0
+        ;;
+esac
